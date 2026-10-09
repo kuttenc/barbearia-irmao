@@ -2,7 +2,8 @@
 
 Instância isolada criada para o telefone `+55 12 99659-7397`. A pasta não importa catálogo com preços, clientes, agenda, mensagens ou credenciais dos outros salões.
 
-Página pública: https://kuttenc.github.io/barbearia-irmao/
+Página pública de agendamento: https://kuttenc.github.io/barbearia-irmao/
+Área de contabilidade: https://kuttenc.github.io/barbearia-irmao/contabilidade/
 
 ## Site
 

@@ -65,6 +65,11 @@ Deno.serve(async request => {
     };
     const action = String(body.action || '');
 
+    if (action === 'appointment_services') {
+      const items = await rest('irmao_salon_catalog?select=name,kind,price_cents,active&active=eq.true&order=kind.asc,name.asc', undefined, 'GET');
+      return json({ items: items || [] });
+    }
+
     if (action === 'appointment_request') {
       const phone = normalizePhone(body.phone);
       const name = String(body.name || '').trim().replace(/\s+/g, ' ');
@@ -95,6 +100,21 @@ Deno.serve(async request => {
       const rows = await rest(`irmao_salon_appointments?select=reference,service_name,appointment_date,appointment_time,status&reference=eq.${reference}&client_phone=eq.${phone}&limit=1`, undefined, 'GET');
       if (!rows?.length) return json({ error: 'appointment_not_found' }, 404);
       return json({ appointment: rows[0] });
+    }
+    if (action === 'appointment_cancel_by_client') {
+      const phone = normalizePhone(body.phone);
+      const reference = String(body.reference || '').trim();
+      if (!phone || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference))
+        return json({ error: 'appointment_not_found' }, 404);
+      const found = await rest(`irmao_salon_appointments?select=id,client_name,client_phone,service_name,appointment_date,appointment_time,status&reference=eq.${reference}&client_phone=eq.${phone}&status=in.(solicitado,confirmado)&limit=1`, undefined, 'GET');
+      if (!found?.length) return json({ error: 'appointment_not_found' }, 404);
+      const item = found[0];
+      const updated = await rest(`irmao_salon_appointments?id=eq.${item.id}&client_phone=eq.${phone}&status=eq.${item.status}`,
+        { status: 'cancelado', updated_at: new Date().toISOString() }, 'PATCH');
+      if (!Array.isArray(updated) || updated.length !== 1) return json({ error: 'appointment_not_found' }, 404);
+      const notified = await sendAppointmentMessage('5512996597397',
+        `Barbearia do Irmão — cliente cancelou um pedido de horário\n${item.client_name}\n${item.service_name}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nWhatsApp: +${phone}`);
+      return json({ cancelled: true, owner_notified: notified });
     }
 
     if (action === 'admin_login') {

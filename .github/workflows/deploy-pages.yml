@@ -25,9 +25,12 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Montar arquivos públicos
         run: |
-          mkdir -p _site/assets
+          mkdir -p _site/assets _site/contabilidade/assets
           cp index.html config.js _site/
           cp assets/barbearia-do-irmao.jpeg _site/assets/
+          cp contabilidade/index.html _site/contabilidade/
+          cp config.js _site/contabilidade/
+          cp assets/barbearia-do-irmao.jpeg _site/contabilidade/assets/
           cp .nojekyll _site/
       - uses: actions/upload-pages-artifact@v3
         with:
