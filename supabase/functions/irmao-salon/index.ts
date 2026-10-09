@@ -147,9 +147,9 @@ Deno.serve(async request => {
       if (password.length < 8 || password.length > 128 || !/^[0-9a-f]{64}$/i.test(expected) ||
           await sha256(`${pepper}:admin-password:${phone}:${password}`) !== expected.toLowerCase())
         return json({ error: 'invalid_credentials' }, 401);
-      const greenUrl = secret('IRMAO_SALON_GREEN_API_URL');
-      const instance = secret('IRMAO_SALON_GREEN_API_INSTANCE_ID');
-      const token = secret('IRMAO_SALON_GREEN_API_TOKEN');
+      const greenUrl = secret('IRMAO_SALON_GREEN_API_URL') || secret('IRMAO_SALON_NOTIFY_GREEN_API_URL') || secret('GREEN_API_FALLBACK_URL') || secret('GREEN_API_URL');
+      const instance = secret('IRMAO_SALON_GREEN_API_INSTANCE_ID') || secret('IRMAO_SALON_NOTIFY_GREEN_API_INSTANCE_ID') || secret('GREEN_API_FALLBACK_INSTANCE_ID') || secret('GREEN_API_INSTANCE_ID');
+      const token = secret('IRMAO_SALON_GREEN_API_TOKEN') || secret('IRMAO_SALON_NOTIFY_GREEN_API_TOKEN') || secret('GREEN_API_FALLBACK_TOKEN') || secret('GREEN_API_TOKEN');
       if (!/^https:\/\/[a-z0-9.-]+\.api\.greenapi\.com$/i.test(greenUrl) || !/^\d{6,20}$/.test(instance) || token.length < 20)
         return json({ error: 'whatsapp_not_configured' }, 503);
       const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
@@ -214,15 +214,16 @@ Deno.serve(async request => {
         { status, updated_at: new Date().toISOString(), updated_by: session.phone }, 'PATCH');
       const changed = Array.isArray(rows) && rows.length === 1 && before[0].status !== status;
       let clientNotified: boolean | null = null;
+      let ownerNotified: boolean | null = null;
       if (changed && ['confirmado','cancelado'].includes(status)) {
         const item = before[0];
         const verb = status === 'confirmado' ? 'confirmado' : 'cancelado';
-        if (status === 'cancelado') await sendAppointmentMessage(ownerGroupChat,
+        if (status === 'cancelado') ownerNotified = await sendAppointmentMessage(ownerGroupChat,
           `Barbearia do Irmão — horário cancelado pela equipe\n${item.client_name}\n${item.service_name}\n${item.note || ''}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nWhatsApp do cliente: +${item.client_phone}`);
         clientNotified = await sendAppointmentMessage(item.client_phone,
           `Barbearia do Irmão — seu horário foi ${verb}.\n${item.service_name}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nSe precisar, fale com a barbearia pelo WhatsApp +5512996597397.`);
       }
-      return json({ ok: Array.isArray(rows) && rows.length === 1, client_notified: clientNotified });
+      return json({ ok: Array.isArray(rows) && rows.length === 1, client_notified: clientNotified, owner_notified: ownerNotified });
     }
     if (action === 'catalog_list') {
       const items = await rest('irmao_salon_catalog?select=id,name,kind,price_cents,active,updated_at&order=kind.asc,name.asc', undefined, 'GET');
