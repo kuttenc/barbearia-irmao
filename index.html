@@ -13,19 +13,20 @@
     @media print{body{background:white;color:#111;font:12pt Georgia,serif}.wrap{width:100%}header,.hero,#login,#entryForm,#catalogCard,.toolbar,.cancel-button,footer,.session,.no-print{display:none!important}.grid{display:block}.card{box-shadow:none;border:0;padding:0}.card h2{font-size:18pt}.entry-card{break-inside:avoid;border:1px solid #bbb;color:#111}.entry-lines,.muted,.payment{color:#333}.report{display:block!important}.entry-card.cancelled{opacity:.7}#app{display:block!important}}
   </style>
   <style>
-    :root{--bg:#071317;--panel:#101f24;--panel2:#182b31;--line:#29444a;--gold:#13d6e5;--green:#94e4b5;--shadow:0 24px 70px #001014aa}
-    body{background:radial-gradient(ellipse at 50% -15%,#07515b 0,transparent 43rem),var(--bg)}
-    .logo{border-color:var(--gold);color:var(--gold)}.hero{background:linear-gradient(120deg,#12323a,#101c20);border-color:#17616a}
-    img.logo{display:block;object-fit:cover;border-radius:14px;background:#061a20}
-    .badge{border-color:#167681;color:#a8f7fb}.field input,.field select{background:#0a171a;border-color:#31545b}
-    .btn.primary{color:#042126}.seg button[aria-pressed=true]{border-color:var(--gold);background:#12383f;color:#b8fbff}
-    .notice{border-color:#23606a;background:#10282d;color:#b9eff1}
-    .booking{margin:14px auto 22px;max-width:940px}.booking-brand{display:grid;grid-template-columns:minmax(180px,290px) 1fr;gap:22px;align-items:center;margin-bottom:20px}.booking-brand img{display:block;width:100%;border-radius:16px;border:1px solid #187985}.booking h1{font-size:clamp(1.6rem,4vw,2.35rem);line-height:1.12;margin:7px 0 10px}.booking .row{align-items:start}.booking .status{margin:0}.appointment-card{border:1px solid var(--line);border-radius:13px;padding:14px;margin:9px 0}.appointment-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.appointment-actions button{flex:1;min-width:130px}.appointment-state{color:var(--gold);font-weight:700}
-    @media(max-width:650px){.booking-brand{grid-template-columns:1fr}.booking-brand img{max-width:320px;margin:auto}.booking .row{flex-direction:column}}
+    :root{--bg:#10100f;--panel:#1c1b18;--panel2:#26241f;--line:#494131;--gold:#d9b66f;--green:#7dd1a3;--red:#f18478;--shadow:0 15px 45px #0005}
+    body{background:radial-gradient(ellipse at 50% -15%,#51402a 0,transparent 43rem),var(--bg)}
+    .logo{border-color:var(--gold);color:var(--gold)}.hero{background:linear-gradient(120deg,#29241d,#191714);border-color:#55442b}
+    img.logo{display:block;object-fit:cover;border-radius:14px;background:#10100f}
+    .badge{border-color:#6d5938;color:#f0d49d}.field input,.field select{background:#12110f;border-color:#524b40}
+    .btn.primary{color:#1b160e}.seg button[aria-pressed=true]{border-color:var(--gold);background:#3b3020;color:#ffe3ae}
+    .notice{border-color:#51452f;background:#262117;color:#ead9b9}
+    .brand-nav{display:flex;gap:8px;align-items:center}.brand-nav a{display:inline-flex;align-items:center;text-decoration:none}
+    .booking{margin:14px auto 22px;max-width:940px}.booking-brand{display:grid;grid-template-columns:145px 1fr;gap:20px;align-items:center;margin-bottom:18px}.booking-brand img{display:block;width:145px;height:145px;object-fit:cover;border-radius:16px;border:1px solid #55442b}.booking h1{font-size:clamp(1.6rem,4vw,2.35rem);line-height:1.12;margin:7px 0 10px}.booking .row{align-items:start}.booking .status{margin:0}.appointment-card{border:1px solid var(--line);border-radius:13px;padding:14px;margin:9px 0}.appointment-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.appointment-actions button{flex:1;min-width:130px}.appointment-state{color:var(--gold);font-weight:700}
+    @media(max-width:650px){.brand{flex-wrap:wrap}.brand-nav{width:100%;padding-top:4px}.booking-brand{grid-template-columns:1fr;text-align:center}.booking-brand img{width:126px;height:126px;margin:auto}.booking .row{flex-direction:column}}
   </style>
 </head>
 <body>
-  <header class="wrap"><div class="brand"><img class="logo" src="assets/barbearia-do-irmao.jpeg" alt="Logo da Barbearia do Irmão"><div><strong>BARBEARIA DO IRMÃO</strong><small>Agendamento e controle do salão</small></div><span class="spacer"></span><span id="roleBadge" class="badge hidden"></span></div></header>
+  <header class="wrap"><div class="brand"><img class="logo" src="assets/barbearia-do-irmao.jpeg" alt="Logo da Barbearia do Irmão"><div><strong>BARBEARIA DO IRMÃO</strong><small>Agendamento e controle do salão</small></div><span class="spacer"></span><nav class="brand-nav" aria-label="Navegação principal"><a class="btn subtle" href="#publicBooking">Agendar</a><a class="btn" href="#login">Área do Irmão</a></nav><span id="roleBadge" class="badge hidden"></span></div></header>
   <main>
     <section id="publicBooking" class="wrap booking card">
       <div class="booking-brand"><img src="assets/barbearia-do-irmao.jpeg" alt="Identidade visual da Barbearia do Irmão"><div><div class="eyebrow">Agende pelo site</div><h1>Seu próximo corte começa aqui.</h1><p class="muted">Escolha o serviço, o dia e o horário desejados. O pedido fica registrado no sistema; o Irmão confirma a disponibilidade pelo contato informado.</p></div></div>
