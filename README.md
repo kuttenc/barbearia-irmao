@@ -1,20 +1,21 @@
 # Barbearia do Irmão
 
-Instância isolada criada para o telefone `+55 12 99659-7397`. A pasta não importa catálogo com preços, clientes, agenda, mensagens ou credenciais dos outros salões.
-
-Página pública de agendamento: https://kuttenc.github.io/barbearia-irmao/
-Área de contabilidade: https://kuttenc.github.io/barbearia-irmao/contabilidade/
+Site público de agendamento e painel privado de agenda/contabilidade, isolados para o salão do Irmão.
 
 ## Site
 
-`site/index.html` combina um formulário público de pedido de horário com a área privada do proprietário. A imagem enviada foi aplicada como logo no cabeçalho e na página de agendamento. O cliente registra nome, telefone, serviço, data e hora pretendidos, recebe uma referência e consulta o status pelo site. O pedido começa como **solicitado**; o horário só fica confirmado quando o proprietário o confirma na agenda. O sistema não presume horário de funcionamento, preços nem disponibilidade.
+- `site/index.html`: página pública com as fotos de Moabe, Miguel Oliveira e Eliezer Miranda Dias, serviços, preços de referência, horários, consulta e cancelamento.
+- `site/contabilidade/`: agenda, catálogo, clientes, lançamentos, pagamentos e relatórios.
+- A agenda aceita pedidos para hoje ou amanhã, de segunda a sábado. O período de almoço (12h–14h) é apenas um pedido e exige confirmação da equipe no grupo. Os períodos não representam confirmação automática.
+- Pedidos incluem o profissional escolhido. A migration `202610090006` impede sobreposição de atendimentos do mesmo profissional e horário; outro profissional pode receber pedido naquele intervalo.
+- Os preços iniciais foram lidos do HTML fornecido pelo proprietário e são cadastrados pela migration `202610090005`.
 
-A área privada usa o painel de contabilidade do salão: catálogo sem preços preenchidos, lançamento de atendimentos, clientes, formas de pagamento, relatórios e impressão em PDF. O proprietário entra com senha e telefone autorizado; a sessão expira após cinco horas. Não há chatbot.
+## Acesso e notificações
 
-O telefone de acesso já está preparado como `5512996597397`. A página pública ainda precisa receber a URL e a chave publicável do projeto em `site/config.js`.
+O painel exige telefone e senha, depois um código de uso único enviado ao grupo WhatsApp “2 Fatores”. A sessão expira em cinco horas. A função `irmao-salon` envia avisos de pedidos, cancelamentos e horários de almoço ao grupo. Ela não usa a API para mensagens de cobrança ou outros serviços.
 
-## Backend isolado
+Configure no Supabase os secrets `IRMAO_SALON_OTP_PEPPER`, `IRMAO_SALON_ADMIN_PASSWORD_HASH`, `IRMAO_SALON_GREEN_API_URL`, `IRMAO_SALON_GREEN_API_INSTANCE_ID` e `IRMAO_SALON_GREEN_API_TOKEN`. O token fica apenas no servidor, nunca no site público ou no repositório.
 
-As migrations `202610090001` a `202610090004` criam tabelas próprias `irmao_salon_*`, com RLS e acesso direto revogado para `anon` e `authenticated`. A função `irmao-salon` valida sessões privadas e grava pedidos públicos com limites por telefone e IP. Ela usa os secrets `IRMAO_SALON_OTP_PEPPER` e `IRMAO_SALON_ADMIN_PASSWORD_HASH`; o hash da senha não fica no navegador nem no repositório. Para avisos de agendamento, prefere `IRMAO_SALON_NOTIFY_GREEN_API_URL`, `IRMAO_SALON_NOTIFY_GREEN_API_INSTANCE_ID` e `IRMAO_SALON_NOTIFY_GREEN_API_TOKEN`; se não forem definidos, usa os `GREEN_API_FALLBACK_*` do remetente da Validade PT260. O envio fica restrito a novo pedido para o Irmão e confirmação/cancelamento para o cliente; não chama cobrança nem outras rotinas da Validade.
+## Supabase
 
-Para configurar uma instalação, aplicar as quatro migrations em ordem, implantar a Edge Function e preencher `site/config.js` com URL e chave anon/publicável. O envio usa a instância Green API fallback da Validade PT260 configurada no projeto e só é disparado por eventos da agenda.
+Aplicar as migrations `202610090001` a `202610090006` em ordem, implantar `supabase/functions/irmao-salon` e apontar `site/config.js` para a URL e a chave publicável do projeto. A função aplica rate limits aos pedidos, valida datas e períodos no fuso de São Paulo e verifica conflito de horário por profissional dentro de uma transação.

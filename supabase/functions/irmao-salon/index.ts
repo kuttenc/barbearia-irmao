@@ -1,5 +1,6 @@
 const encoder = new TextEncoder();
 const allowedPhones = new Set(['5512996597397']);
+const ownerGroupChat = '120363410799918430@g.us';
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, apikey, content-type',
@@ -21,15 +22,15 @@ async function sha256(value: string) { return hex(new Uint8Array(await crypto.su
 function secret(name: string) { return Deno.env.get(name) || ''; }
 async function sendAppointmentMessage(destination: string, message: string): Promise<boolean> {
   // Prefer dedicated values; fallback names are the sender already used by Validade PT260.
-  const base = (secret('IRMAO_SALON_NOTIFY_GREEN_API_URL') || secret('GREEN_API_FALLBACK_URL') || secret('GREEN_API_URL')).replace(/\/$/, '');
-  const instance = secret('IRMAO_SALON_NOTIFY_GREEN_API_INSTANCE_ID') || secret('GREEN_API_FALLBACK_INSTANCE_ID') || secret('GREEN_API_INSTANCE_ID');
-  const token = secret('IRMAO_SALON_NOTIFY_GREEN_API_TOKEN') || secret('GREEN_API_FALLBACK_TOKEN') || secret('GREEN_API_TOKEN');
+  const base = (secret('IRMAO_SALON_GREEN_API_URL') || secret('IRMAO_SALON_NOTIFY_GREEN_API_URL') || secret('GREEN_API_FALLBACK_URL') || secret('GREEN_API_URL')).replace(/\/$/, '');
+  const instance = secret('IRMAO_SALON_GREEN_API_INSTANCE_ID') || secret('IRMAO_SALON_NOTIFY_GREEN_API_INSTANCE_ID') || secret('GREEN_API_FALLBACK_INSTANCE_ID') || secret('GREEN_API_INSTANCE_ID');
+  const token = secret('IRMAO_SALON_GREEN_API_TOKEN') || secret('IRMAO_SALON_NOTIFY_GREEN_API_TOKEN') || secret('GREEN_API_FALLBACK_TOKEN') || secret('GREEN_API_TOKEN');
   if (!/^https:\/\/[a-z0-9.-]+\.api\.greenapi\.com$/i.test(base) || !/^\d{6,20}$/.test(instance) || token.length < 20)
     return false;
   try {
     const response = await fetch(`${base}/waInstance${instance}/sendMessage/${token}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chatId: `${destination}@c.us`, message }), signal: AbortSignal.timeout(12000),
+      body: JSON.stringify({ chatId: destination.includes('@') ? destination : `${destination}@c.us`, message }), signal: AbortSignal.timeout(12000),
     });
     if (!response.ok) return false;
     const receipt = await response.json();
@@ -78,8 +79,25 @@ Deno.serve(async request => {
       const time = String(body.time || '');
       const note = String(body.note || '').trim();
       if (!phone || name.length < 2 || name.length > 80 || service.length < 2 || service.length > 60 ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time) || note.length > 240)
+          !/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time) ||
+          !/^Profissional: (Moabe|Miguel Oliveira|Eliezer Miranda Dias)$/.test(note) || note.length > 240)
         return json({ error: 'invalid_appointment' }, 400);
+      const spParts = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+        .formatToParts(new Date()).reduce((parts, item) => ({ ...parts, [item.type]: item.value }), {} as Record<string, string>);
+      const todaySP = `${spParts.year}-${spParts.month}-${spParts.day}`;
+      const tomorrowDate = new Date(`${todaySP}T12:00:00Z`);
+      tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
+      const tomorrowSP = tomorrowDate.toISOString().slice(0, 10);
+      const requestedMinutes = Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+      const nowSP = Number(spParts.hour) * 60 + Number(spParts.minute);
+      const isSunday = new Date(`${date}T12:00:00Z`).getUTCDay() === 0;
+      const validPeriod = (requestedMinutes >= 480 && requestedMinutes < 720) ||
+        (requestedMinutes >= 720 && requestedMinutes < 840) ||
+        (requestedMinutes >= 840 && requestedMinutes < 1080) ||
+        (requestedMinutes >= 1080 && requestedMinutes <= 1365);
+      if ((date !== todaySP && date !== tomorrowSP) || isSunday || !validPeriod ||
+          (Number(spParts.hour) >= 12 && requestedMinutes < 720) || (date === todaySP && requestedMinutes <= nowSP))
+        return json({ error: 'invalid_appointment_window' }, 400);
       const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
       const result = await rest('rpc/irmao_salon_request_appointment', {
         p_name: name, p_phone: phone, p_service: service, p_date: date, p_time: time,
@@ -88,8 +106,12 @@ Deno.serve(async request => {
       });
       if (result?.error === 'appointment_rate_limited') return json({ error: result.error }, 429);
       if (result?.error === 'invalid_appointment') return json({ error: result.error }, 400);
-      const sent = result?.reference ? await sendAppointmentMessage('5512996597397',
-        `Barbearia do Irmão — novo pedido de agendamento\n${name}\n${service}\n${appointmentWhen(date, time)}\nWhatsApp: +${phone}\nReferência: ${result.reference}`) : false;
+      if (result?.error === 'invalid_appointment_window') return json({ error: result.error }, 400);
+      if (result?.error === 'professional_unavailable') return json({ error: result.error }, 409);
+      const lunchNotice = requestedMinutes >= 720 && requestedMinutes < 840 ? '\nATENÇÃO: horário de almoço — confirmar com a equipe no grupo antes de aceitar.' : '';
+      const professional = note.match(/^Profissional:\s*(.{2,80})$/i)?.[1] || 'A definir';
+      const sent = result?.reference ? await sendAppointmentMessage(ownerGroupChat,
+        `Barbearia do Irmão — novo pedido de agendamento${lunchNotice}\n${name}\n${service}\nProfissional: ${professional}\n${appointmentWhen(date, time)}\nWhatsApp: +${phone}\nReferência: ${result.reference}`) : false;
       return json({ appointment: result, owner_notified: sent });
     }
     if (action === 'appointment_status') {
@@ -97,7 +119,7 @@ Deno.serve(async request => {
       const reference = String(body.reference || '').trim();
       if (!phone || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference))
         return json({ error: 'appointment_not_found' }, 404);
-      const rows = await rest(`irmao_salon_appointments?select=reference,service_name,appointment_date,appointment_time,status&reference=eq.${reference}&client_phone=eq.${phone}&limit=1`, undefined, 'GET');
+      const rows = await rest(`irmao_salon_appointments?select=reference,service_name,appointment_date,appointment_time,status,note&reference=eq.${reference}&client_phone=eq.${phone}&limit=1`, undefined, 'GET');
       if (!rows?.length) return json({ error: 'appointment_not_found' }, 404);
       return json({ appointment: rows[0] });
     }
@@ -106,38 +128,25 @@ Deno.serve(async request => {
       const reference = String(body.reference || '').trim();
       if (!phone || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(reference))
         return json({ error: 'appointment_not_found' }, 404);
-      const found = await rest(`irmao_salon_appointments?select=id,client_name,client_phone,service_name,appointment_date,appointment_time,status&reference=eq.${reference}&client_phone=eq.${phone}&status=in.(solicitado,confirmado)&limit=1`, undefined, 'GET');
+      const found = await rest(`irmao_salon_appointments?select=id,client_name,client_phone,service_name,appointment_date,appointment_time,status,note&reference=eq.${reference}&client_phone=eq.${phone}&status=in.(solicitado,confirmado)&limit=1`, undefined, 'GET');
       if (!found?.length) return json({ error: 'appointment_not_found' }, 404);
       const item = found[0];
       const updated = await rest(`irmao_salon_appointments?id=eq.${item.id}&client_phone=eq.${phone}&status=eq.${item.status}`,
         { status: 'cancelado', updated_at: new Date().toISOString() }, 'PATCH');
       if (!Array.isArray(updated) || updated.length !== 1) return json({ error: 'appointment_not_found' }, 404);
-      const notified = await sendAppointmentMessage('5512996597397',
-        `Barbearia do Irmão — cliente cancelou um pedido de horário\n${item.client_name}\n${item.service_name}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nWhatsApp: +${phone}`);
+      const notified = await sendAppointmentMessage(ownerGroupChat,
+        `Barbearia do Irmão — cliente cancelou um pedido de horário\n${item.client_name}\n${item.service_name}\n${item.note || ''}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nWhatsApp: +${phone}`);
       return json({ cancelled: true, owner_notified: notified });
-    }
-
-    if (action === 'admin_login') {
-      const phone = normalizePhone(body.phone);
-      const password = String(body.password || '');
-      if (!phone || !allowedPhones.has(phone) || password.length < 8 || password.length > 128)
-        return json({ error: 'invalid_credentials' }, 401);
-      const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-      const ipHash = await sha256(`${pepper}:admin-login-ip:${ip}`);
-      if (!await rest('rpc/irmao_salon_take_admin_login', { p_ip_hash: ipHash }))
-        return json({ error: 'try_later' }, 429);
-      const expected = secret('IRMAO_SALON_ADMIN_PASSWORD_HASH');
-      if (!/^[0-9a-f]{64}$/i.test(expected) || await sha256(`${pepper}:admin-password:${phone}:${password}`) !== expected.toLowerCase())
-        return json({ error: 'invalid_credentials' }, 401);
-      const rawToken = hex(crypto.getRandomValues(new Uint8Array(32)));
-      const expiresAt = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString();
-      await rest('irmao_salon_sessions', { token_hash: await sha256(rawToken), phone, expires_at: expiresAt });
-      return json({ token: rawToken, phone, role: 'owner', expires_at: expiresAt });
     }
 
     if (action === 'send_code') {
       const phone = normalizePhone(body.phone);
       if (!phone || !allowedPhones.has(phone)) return json({ error: 'phone_not_allowed' }, 403);
+      const password = String(body.password || '');
+      const expected = secret('IRMAO_SALON_ADMIN_PASSWORD_HASH');
+      if (password.length < 8 || password.length > 128 || !/^[0-9a-f]{64}$/i.test(expected) ||
+          await sha256(`${pepper}:admin-password:${phone}:${password}`) !== expected.toLowerCase())
+        return json({ error: 'invalid_credentials' }, 401);
       const greenUrl = secret('IRMAO_SALON_GREEN_API_URL');
       const instance = secret('IRMAO_SALON_GREEN_API_INSTANCE_ID');
       const token = secret('IRMAO_SALON_GREEN_API_TOKEN');
@@ -152,11 +161,17 @@ Deno.serve(async request => {
         issued === 'rate_limited' ? 'try_later' : 'phone_not_allowed' }, issued === 'not_allowed' ? 403 : 429);
       const response = await fetch(`${greenUrl}/waInstance${instance}/sendMessage/${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId: `${phone}@c.us`, message: `Código de acesso ao painel da Barbearia do Irmão: ${code}. Ele vence em 10 minutos. Não compartilhe este código. A sessão termina 5 horas após a confirmação.` }),
+        body: JSON.stringify({ chatId: ownerGroupChat, message: `Código de acesso ao painel da Barbearia do Irmão: ${code}. Ele vence em 10 minutos. Não compartilhe este código. A sessão termina 5 horas após a confirmação.` }),
       });
-      if (!response.ok) return json({ error: 'whatsapp_delivery_failed' }, 503);
+      if (!response.ok) {
+        await rest(`irmao_salon_otp_challenges?phone=eq.${phone}`, { attempts: 5, consumed_at: new Date().toISOString(), updated_at: new Date().toISOString() }, 'PATCH');
+        return json({ error: 'whatsapp_delivery_failed' }, 503);
+      }
       const sent = await response.json();
-      if (!/^[A-Za-z0-9_-]{5,160}$/.test(String(sent?.idMessage || ''))) return json({ error: 'whatsapp_delivery_failed' }, 503);
+      if (!/^[A-Za-z0-9_-]{5,160}$/.test(String(sent?.idMessage || ''))) {
+        await rest(`irmao_salon_otp_challenges?phone=eq.${phone}`, { attempts: 5, consumed_at: new Date().toISOString(), updated_at: new Date().toISOString() }, 'PATCH');
+        return json({ error: 'whatsapp_delivery_failed' }, 503);
+      }
       return json({ sent: true, destination: phone.slice(-4) });
     }
 
@@ -193,7 +208,7 @@ Deno.serve(async request => {
       const status = String(body.status || '');
       if (!Number.isSafeInteger(id) || !['confirmado','cancelado','concluido'].includes(status))
         return json({ error: 'invalid_appointment_update' }, 400);
-      const before = await rest(`irmao_salon_appointments?select=id,client_name,client_phone,service_name,appointment_date,appointment_time,status&id=eq.${id}&limit=1`, undefined, 'GET');
+        const before = await rest(`irmao_salon_appointments?select=id,client_name,client_phone,service_name,appointment_date,appointment_time,status,note&id=eq.${id}&limit=1`, undefined, 'GET');
       if (!before?.length) return json({ ok: false });
       const rows = await rest(`irmao_salon_appointments?id=eq.${id}&status=neq.cancelado`,
         { status, updated_at: new Date().toISOString(), updated_by: session.phone }, 'PATCH');
@@ -202,6 +217,8 @@ Deno.serve(async request => {
       if (changed && ['confirmado','cancelado'].includes(status)) {
         const item = before[0];
         const verb = status === 'confirmado' ? 'confirmado' : 'cancelado';
+        if (status === 'cancelado') await sendAppointmentMessage(ownerGroupChat,
+          `Barbearia do Irmão — horário cancelado pela equipe\n${item.client_name}\n${item.service_name}\n${item.note || ''}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nWhatsApp do cliente: +${item.client_phone}`);
         clientNotified = await sendAppointmentMessage(item.client_phone,
           `Barbearia do Irmão — seu horário foi ${verb}.\n${item.service_name}\n${appointmentWhen(item.appointment_date, item.appointment_time)}\nSe precisar, fale com a barbearia pelo WhatsApp +5512996597397.`);
       }
