@@ -1,5 +1,4 @@
 const encoder = new TextEncoder();
-const allowedPhones = new Set(['5512996597397']);
 const ownerGroupChat = '120363410799918430@g.us';
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -64,11 +63,15 @@ Deno.serve(async request => {
       if (!response.ok) throw new Error(`database_${response.status}`);
       return text ? JSON.parse(text) : null;
     };
+    const authorizedPhone = async (phone: string) => {
+      const rows = await rest(`irmao_salon_allowed_phones?select=phone,role&phone=eq.${phone}&enabled=eq.true&limit=1`, undefined, 'GET');
+      return rows?.[0] || null;
+    };
     const action = String(body.action || '');
 
     if (action === 'appointment_services') {
       const items = await rest('irmao_salon_catalog?select=name,kind,price_cents,active&active=eq.true&order=kind.asc,name.asc', undefined, 'GET');
-      return json({ items: items || [] });
+      return json({ items: (items || []).filter((x: any) => !/sobrancelha/i.test(String(x.name || ''))) });
     }
 
     if (action === 'appointment_request') {
@@ -95,7 +98,7 @@ Deno.serve(async request => {
         (requestedMinutes >= 720 && requestedMinutes < 840) ||
         (requestedMinutes >= 840 && requestedMinutes < 1080) ||
         (requestedMinutes >= 1080 && requestedMinutes <= 1365);
-      if ((date !== todaySP && date !== tomorrowSP) || isSunday || !validPeriod ||
+      if ((date !== todaySP && date !== tomorrowSP) || isSunday || !validPeriod || requestedMinutes % 30 !== 0 ||
           (Number(spParts.hour) >= 12 && requestedMinutes < 720) || (date === todaySP && requestedMinutes <= nowSP))
         return json({ error: 'invalid_appointment_window' }, 400);
       const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
@@ -139,12 +142,72 @@ Deno.serve(async request => {
       return json({ cancelled: true, owner_notified: notified });
     }
 
+    if (action === 'enroll_start') {
+      const phone = normalizePhone(body.phone);
+      const password = String(body.password || '');
+      if (!phone || password.length < 10 || password.length > 128) return json({ error: 'invalid_enrollment' }, 400);
+      const existing = await authorizedPhone(phone);
+      const priorCredential = await rest(`irmao_salon_admin_credentials?select=phone&phone=eq.${phone}&limit=1`, undefined, 'GET');
+      if (existing && priorCredential?.length) return json({ error: 'already_registered' }, 409);
+      const priorChallenge = await rest(`irmao_salon_enrollment_challenges?select=created_at&phone=eq.${phone}&limit=1`, undefined, 'GET');
+      if (priorChallenge?.length && Date.now() - Date.parse(priorChallenge[0].created_at) < 60_000)
+        return json({ error: 'please_wait' }, 429);
+      const greenUrl = secret('IRMAO_SALON_GREEN_API_URL') || secret('GREEN_API_FALLBACK_URL') || secret('GREEN_API_URL');
+      const instance = secret('IRMAO_SALON_GREEN_API_INSTANCE_ID') || secret('GREEN_API_FALLBACK_INSTANCE_ID') || secret('GREEN_API_INSTANCE_ID');
+      const token = secret('IRMAO_SALON_GREEN_API_TOKEN') || secret('GREEN_API_FALLBACK_TOKEN') || secret('GREEN_API_TOKEN');
+      if (!/^https:\/\/[a-z0-9.-]+\.api\.greenapi\.com$/i.test(greenUrl) || !/^\d{6,20}$/.test(instance) || token.length < 20)
+        return json({ error: 'whatsapp_not_configured' }, 503);
+      const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, '0');
+      await rest('irmao_salon_enrollment_challenges?on_conflict=phone', {
+        phone, code_hash: await sha256(`${pepper}:enrollment:${phone}:${code}`),
+        password_hash: await sha256(`${pepper}:admin-password:${phone}:${password}`),
+        expires_at: new Date(Date.now() + 10 * 60_000).toISOString(), attempts: 0,
+      }, 'POST', 'resolution=merge-duplicates,return=representation');
+      const response = await fetch(`${greenUrl}/waInstance${instance}/sendMessage/${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId: ownerGroupChat, message: `Primeiro acesso à Contabilidade da Barbearia do Irmão\nTelefone informado: +${phone}\nCódigo para confirmar e criar o acesso: ${code}\nVálido por 10 minutos. Só compartilhe o código se reconhecer a pessoa.` }),
+      });
+      const receipt = response.ok ? await response.json().catch(() => ({})) : {};
+      if (!/^[A-Za-z0-9_-]{5,160}$/.test(String(receipt?.idMessage || ''))) {
+        await rest(`irmao_salon_enrollment_challenges?phone=eq.${phone}`, undefined, 'DELETE');
+        return json({ error: 'whatsapp_delivery_failed' }, 503);
+      }
+      return json({ code_sent: true });
+    }
+
+    if (action === 'enroll_verify') {
+      const phone = normalizePhone(body.phone);
+      const code = String(body.code || '').trim();
+      if (!phone || !/^\d{6}$/.test(code)) return json({ error: 'invalid_code' }, 400);
+      const challenges = await rest(`irmao_salon_enrollment_challenges?phone=eq.${phone}&limit=1`, undefined, 'GET');
+      const challenge = challenges?.[0];
+      if (!challenge || Date.parse(challenge.expires_at) <= Date.now() || Number(challenge.attempts) >= 5)
+        return json({ error: 'code_expired' }, 401);
+      if (await sha256(`${pepper}:enrollment:${phone}:${code}`) !== challenge.code_hash) {
+        await rest(`irmao_salon_enrollment_challenges?phone=eq.${phone}`, { attempts: Number(challenge.attempts) + 1 }, 'PATCH');
+        return json({ error: 'invalid_code' }, 401);
+      }
+      const existing = await authorizedPhone(phone);
+      if (!existing) await rest('irmao_salon_allowed_phones', { phone, role: 'admin', enabled: true }, 'POST');
+      await rest('irmao_salon_admin_credentials?on_conflict=phone', {
+        phone, password_hash: challenge.password_hash, updated_at: new Date().toISOString(),
+      }, 'POST', 'resolution=merge-duplicates,return=representation');
+      await rest(`irmao_salon_enrollment_challenges?phone=eq.${phone}`, undefined, 'DELETE');
+      const rawToken = hex(crypto.getRandomValues(new Uint8Array(32)));
+      const expiresAt = new Date(Date.now() + 5 * 60 * 60_000).toISOString();
+      await rest('irmao_salon_sessions', { token_hash: await sha256(rawToken), phone, expires_at: expiresAt }, 'POST');
+      return json({ token: rawToken, phone, role: existing?.role || 'admin', expires_at: expiresAt });
+    }
+
     if (action === 'send_code') {
       const phone = normalizePhone(body.phone);
-      if (!phone || !allowedPhones.has(phone)) return json({ error: 'phone_not_allowed' }, 403);
+      const account = phone ? await authorizedPhone(phone) : null;
+      if (!phone || !account) return json({ error: 'phone_not_allowed' }, 403);
       const password = String(body.password || '');
-      const expected = secret('IRMAO_SALON_ADMIN_PASSWORD_HASH');
-      if (password.length < 8 || password.length > 128 || !/^[0-9a-f]{64}$/i.test(expected) ||
+      const saved = await rest(`irmao_salon_admin_credentials?select=password_hash&phone=eq.${phone}&limit=1`, undefined, 'GET');
+      const expected = saved?.[0]?.password_hash || (phone === '5512996597397' ? secret('IRMAO_SALON_ADMIN_PASSWORD_HASH') : '');
+      if (!expected) return json({ error: 'first_access_required' }, 409);
+      if (password.length < 10 || password.length > 128 || !/^[0-9a-f]{64}$/i.test(expected) ||
           await sha256(`${pepper}:admin-password:${phone}:${password}`) !== expected.toLowerCase())
         return json({ error: 'invalid_credentials' }, 401);
       const greenUrl = secret('IRMAO_SALON_GREEN_API_URL') || secret('IRMAO_SALON_NOTIFY_GREEN_API_URL') || secret('GREEN_API_FALLBACK_URL') || secret('GREEN_API_URL');
@@ -178,13 +241,14 @@ Deno.serve(async request => {
     if (action === 'verify_code') {
       const phone = normalizePhone(body.phone);
       const code = String(body.code || '').trim();
-      if (!phone || !allowedPhones.has(phone) || !/^\d{6}$/.test(code)) return json({ error: 'invalid_code' }, 400);
+      const account = phone ? await authorizedPhone(phone) : null;
+      if (!phone || !account || !/^\d{6}$/.test(code)) return json({ error: 'invalid_code' }, 400);
       const rawToken = hex(crypto.getRandomValues(new Uint8Array(32)));
       const result = await rest('rpc/irmao_salon_verify_otp', {
         p_phone: phone, p_code_hash: await sha256(`${pepper}:${phone}:${code}`), p_token_hash: await sha256(rawToken),
       });
       if (!result?.ok) return json({ error: result?.reason === 'expired' ? 'code_expired' : 'invalid_code' }, 401);
-      return json({ token: rawToken, phone, role: 'owner', expires_at: result.expires_at });
+      return json({ token: rawToken, phone, role: account.role, expires_at: result.expires_at });
     }
 
     const bearer = request.headers.get('authorization') || '';
@@ -193,11 +257,34 @@ Deno.serve(async request => {
     const tokenHash = await sha256(rawToken);
     const sessionRows = await rest(`irmao_salon_sessions?select=phone,expires_at&token_hash=eq.${tokenHash}&revoked_at=is.null&expires_at=gt.${encodeURIComponent(new Date().toISOString())}`, undefined, 'GET');
     const session = sessionRows?.[0];
-    if (!session || !allowedPhones.has(session.phone)) return json({ error: 'session_expired' }, 401);
+    if (!session || !await authorizedPhone(session.phone)) return json({ error: 'session_expired' }, 401);
 
     if (action === 'logout') {
       await rest(`irmao_salon_sessions?token_hash=eq.${tokenHash}&revoked_at=is.null`, { revoked_at: new Date().toISOString() }, 'PATCH');
       return json({ ok: true });
+    }
+    if (action === 'emergency_check' || action === 'emergency_create') {
+      const date = String(body.date || '');
+      const time = String(body.time || '');
+      const professional = String(body.professional || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(time) ||
+          !['Moabe','Miguel Oliveira','Eliezer Miranda Dias'].includes(professional))
+        return json({ error: 'invalid_emergency_slot' }, 400);
+      const canFit = await rest('rpc/irmao_salon_can_fit_emergency', {
+        p_date: date, p_time: time.length === 5 ? `${time}:00` : time, p_professional: professional,
+      });
+      if (action === 'emergency_check') return json({ can_fit: Boolean(canFit) });
+      const name = String(body.name || '').trim().replace(/\s+/g, ' ');
+      const phone = normalizePhone(body.phone);
+      if (!phone || name.length < 2 || name.length > 80) return json({ error: 'invalid_emergency_client' }, 400);
+      const created = await rest('rpc/irmao_salon_create_emergency_appointment', {
+        p_admin_phone: session.phone, p_name: name, p_phone: phone, p_date: date,
+        p_time: time.length === 5 ? `${time}:00` : time, p_professional: professional,
+      });
+      if (created?.error === 'emergency_slot_unavailable') return json({ error: created.error }, 409);
+      const notified = created?.reference ? await sendAppointmentMessage(ownerGroupChat,
+        `Barbearia do Irmão — corte emergente lançado manualmente\n${name}\nProfissional: ${professional}\n${appointmentWhen(date, time)}\nWhatsApp: +${phone}\nReferência: ${created.reference}`) : false;
+      return json({ appointment: created, owner_notified: notified });
     }
     if (action === 'appointment_list') {
       const rows = await rest('irmao_salon_appointments?select=id,reference,client_name,client_phone,service_name,appointment_date,appointment_time,note,status,created_at&order=appointment_date.asc,appointment_time.asc&limit=300', undefined, 'GET');
@@ -226,7 +313,7 @@ Deno.serve(async request => {
       return json({ ok: Array.isArray(rows) && rows.length === 1, client_notified: clientNotified, owner_notified: ownerNotified });
     }
     if (action === 'catalog_list') {
-      const items = await rest('irmao_salon_catalog?select=id,name,kind,price_cents,active,updated_at&order=kind.asc,name.asc', undefined, 'GET');
+      const items = await rest('irmao_salon_catalog?select=id,name,kind,price_cents,cost_cents,active,updated_at&order=kind.asc,name.asc', undefined, 'GET');
       return json({ items: items || [], role: 'owner', expires_at: session.expires_at });
     }
     if (action === 'catalog_save') {
@@ -234,11 +321,13 @@ Deno.serve(async request => {
       const name = String(body.item?.name || '').trim().replace(/\s+/g, ' ');
       const kind = String(body.item?.kind || '');
       const price = Number(body.item?.price_cents);
+      const cost = body.item?.cost_cents == null || body.item?.cost_cents === '' ? null : Number(body.item.cost_cents);
       if (name.length < 2 || name.length > 60 || !['servico','produto'].includes(kind) ||
-          !Number.isSafeInteger(price) || price < 1 || price > 100_000_000 || (id !== null && !Number.isSafeInteger(id)))
+          !Number.isSafeInteger(price) || price < 1 || price > 100_000_000 ||
+          (cost !== null && (!Number.isSafeInteger(cost) || cost < 0 || cost > 100_000_000)) || (id !== null && !Number.isSafeInteger(id)))
         return json({ error: 'invalid_catalog_item' }, 400);
       const saved = await rest(id ? `irmao_salon_catalog?id=eq.${id}` : 'irmao_salon_catalog',
-        { name, kind, price_cents: price, active: true, updated_at: new Date().toISOString() },
+        { name, kind, price_cents: price, cost_cents: cost, active: true, updated_at: new Date().toISOString() },
         id ? 'PATCH' : 'POST');
       return json({ item: Array.isArray(saved) ? saved[0] : saved });
     }
@@ -290,7 +379,8 @@ Deno.serve(async request => {
           items.length < 1 || items.length > 20 || !Number.isSafeInteger(total) || total <= 0 || total > 100_000_000 ||
           items.some((x: any) => typeof x.name !== 'string' || x.name.trim().length < 2 || x.name.length > 60 ||
             !['servico','produto'].includes(x.kind) || !Number.isSafeInteger(Number(x.quantity)) || Number(x.quantity) < 1 ||
-            !Number.isSafeInteger(Number(x.unit_price_cents)) || Number(x.unit_price_cents) < 1))
+            !Number.isSafeInteger(Number(x.unit_price_cents)) || Number(x.unit_price_cents) < 1 ||
+            (x.unit_cost_cents != null && (!Number.isSafeInteger(Number(x.unit_cost_cents)) || Number(x.unit_cost_cents) < 0))))
         return json({ error: 'invalid_entry' }, 400);
       const saved = await rest('rpc/irmao_salon_create_entry', { p_phone: session.phone,
         p_service_date: e.service_date, p_period: e.period, p_client_name: String(e.client_name || '').slice(0, 80),
